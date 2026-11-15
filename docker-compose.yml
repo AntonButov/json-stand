@@ -1,0 +1,8 @@
+services:
+  json-stand:
+    build: .
+    ports:
+      - "8132:8080"
+    environment:
+      - SOFFICE_PATH=/usr/bin/soffice
+    restart: unless-stopped

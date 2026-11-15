@@ -1,0 +1,104 @@
+{
+  "pass": [
+    {
+      "id": "01",
+      "file": "01_simple.json",
+      "expect": "pass"
+    },
+    {
+      "id": "02",
+      "file": "02_two_tables.json",
+      "expect": "pass"
+    },
+    {
+      "id": "03",
+      "file": "03_wide.json",
+      "expect": "pass"
+    },
+    {
+      "id": "04",
+      "file": "04_tall.json",
+      "expect": "pass"
+    },
+    {
+      "id": "05",
+      "file": "05_russian.json",
+      "expect": "pass"
+    },
+    {
+      "id": "06",
+      "file": "06_numbers.json",
+      "expect": "pass"
+    },
+    {
+      "id": "07",
+      "file": "07_empty_cells.json",
+      "expect": "pass"
+    },
+    {
+      "id": "08",
+      "file": "08_invoice.json",
+      "expect": "pass"
+    },
+    {
+      "id": "09",
+      "file": "09_dates.json",
+      "expect": "pass"
+    },
+    {
+      "id": "10",
+      "file": "10_styled_header.json",
+      "expect": "pass"
+    },
+    {
+      "id": "11",
+      "file": "11_cities.json",
+      "expect": "pass"
+    },
+    {
+      "id": "12",
+      "file": "12_links_like.json",
+      "expect": "pass"
+    },
+    {
+      "id": "13",
+      "file": "13_mixed.json",
+      "expect": "pass"
+    },
+    {
+      "id": "14",
+      "file": "14_single_row.json",
+      "expect": "pass"
+    },
+    {
+      "id": "15",
+      "file": "15_inventory.json",
+      "expect": "pass"
+    },
+    {
+      "id": "16",
+      "file": "16_multipage.json",
+      "expect": "pass"
+    },
+    {
+      "id": "17",
+      "file": "17_budget.json",
+      "expect": "pass"
+    },
+    {
+      "id": "18",
+      "file": "18_employees.json",
+      "expect": "pass"
+    },
+    {
+      "id": "19",
+      "file": "19_metrics.json",
+      "expect": "pass"
+    },
+    {
+      "id": "20",
+      "file": "20_orders.json",
+      "expect": "pass"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+FROM python:3.12-slim-bookworm
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libreoffice-calc \
+    fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY pyproject.toml README.md LICENSE ./
+COPY json_stand ./json_stand
+RUN pip install --no-cache-dir .
+
+EXPOSE 8080
+CMD ["uvicorn", "json_stand.api:app", "--host", "0.0.0.0", "--port", "8080"]

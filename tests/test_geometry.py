@@ -88,6 +88,12 @@ def test_sheet_keeps_font_merge_and_exact_row_height(tmp_path: Path):
         )
     assert ("Arial", 8.5, True) in fonts
     assert ("Arial", 6.5, False) in fonts
+    from openpyxl import load_workbook
+
+    wb = load_workbook(out)
+    cell = wb.active["A3"]
+    assert cell.border.left.style == "thin"
+    assert cell.border.right.style == "thin"
 
 
 def test_sheet_embeds_png_image_after_normalize(tmp_path: Path):

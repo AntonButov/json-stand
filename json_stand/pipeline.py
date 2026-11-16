@@ -15,7 +15,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
 from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
 from openpyxl.drawing.xdr import XDRPositiveSize2D
-from openpyxl.styles import Alignment, Font
+from openpyxl.styles import Alignment, Border, Font, Side
 from openpyxl.utils import get_column_letter
 
 from json_stand.models import ConvertError, ConvertResult
@@ -198,6 +198,10 @@ def _positive_floats(value: object) -> list[float] | None:
     return numbers
 
 
+_THIN = Side(style="thin", color="000000")
+_GRID_BORDER = Border(left=_THIN, right=_THIN, top=_THIN, bottom=_THIN)
+
+
 def _apply_style(cell, style: object) -> None:
     if not isinstance(style, dict):
         return
@@ -215,6 +219,17 @@ def _apply_style(cell, style: object) -> None:
     )
 
 
+def _apply_grid_borders(ws, rows: object) -> None:
+    """PDF tables are ruled; paint a thin grid over the sheet footprint."""
+    if not isinstance(rows, list):
+        return
+    for r_i, row in enumerate(rows, start=1):
+        if not isinstance(row, list):
+            continue
+        for c_i in range(1, len(row) + 1):
+            ws.cell(row=r_i, column=c_i).border = _GRID_BORDER
+
+
 def _apply_merges(ws, merges: object) -> None:
     if not isinstance(merges, list):
         return
@@ -227,11 +242,11 @@ def _restore_row_heights(path: Path, tables: list[dict[str, Any]]) -> None:
     wb = load_workbook(path)
     for ws, table in zip(wb.worksheets, tables):
         heights = _positive_floats(table.get("row_heights_pt"))
-        if not heights:
-            continue
-        for index, points in enumerate(heights, start=1):
-            if points > 0:
-                ws.row_dimensions[index].height = points
+        if heights:
+            for index, points in enumerate(heights, start=1):
+                if points > 0:
+                    ws.row_dimensions[index].height = points
+        _apply_grid_borders(ws, table.get("rows"))
     wb.save(path)
 
 
@@ -466,6 +481,7 @@ def convert_data(
                 _apply_style(written, style)
         _apply_merges(ws, table.get("merges"))
         _apply_geometry(ws, table)
+        _apply_grid_borders(ws, table.get("rows"))
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
         ws.page_setup.fitToPage = True
         ws.page_setup.fitToWidth = 1

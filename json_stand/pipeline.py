@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import shutil
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any
+from xml.etree import ElementTree as ET
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.drawing.image import Image as XLImage
@@ -22,6 +25,27 @@ from json_stand.models import ConvertError, ConvertResult
 # the printed column the same width as the PDF column.
 EXCEL_PT_PER_WIDTH = 5.55
 EMU_PER_PT = 12700
+
+# ECMA-376 CT_Font child order. openpyxl/LibreOffice often emit name/color
+# before sz; openxml-audit then reports Unexpected element 'sz'/'color'.
+_FONT_CHILD_ORDER = (
+    "b",
+    "i",
+    "strike",
+    "condense",
+    "extend",
+    "outline",
+    "shadow",
+    "u",
+    "vertAlign",
+    "sz",
+    "color",
+    "name",
+    "family",
+    "charset",
+    "scheme",
+)
+_SSML = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
 
 def _find_soffice() -> str | None:
@@ -101,6 +125,66 @@ def _normalize_xlsx(path: Path, timeout_s: int = 60) -> str | None:
 
 def points_to_excel_width(points: float) -> float:
     return round(points / EXCEL_PT_PER_WIDTH, 2)
+
+
+def _local(tag: str) -> str:
+    if tag.startswith("{"):
+        return tag.rsplit("}", 1)[-1]
+    return tag
+
+
+def _canonicalize_ooxml_fonts(path: Path) -> None:
+    """Rewrite xl/styles.xml <font> children into schema order."""
+    try:
+        with zipfile.ZipFile(path, "r") as zin:
+            if "xl/styles.xml" not in zin.namelist():
+                return
+            styles_xml = zin.read("xl/styles.xml")
+            others = {name: zin.read(name) for name in zin.namelist() if name != "xl/styles.xml"}
+    except zipfile.BadZipFile:
+        return
+
+    root = ET.fromstring(styles_xml)
+    ns = {"m": _SSML}
+    fonts = root.find("m:fonts", ns)
+    if fonts is None:
+        # default-ns stripped variants
+        fonts = root.find(f"{{{_SSML}}}fonts")
+    if fonts is None:
+        return
+
+    order_index = {name: i for i, name in enumerate(_FONT_CHILD_ORDER)}
+    changed = False
+    for font in list(fonts):
+        if _local(font.tag) != "font":
+            continue
+        children = list(font)
+        ranked: list[tuple[int, int, ET.Element]] = []
+        for idx, child in enumerate(children):
+            ranked.append((order_index.get(_local(child.tag), 1000), idx, child))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        new_order = [item[2] for item in ranked]
+        if new_order == children:
+            continue
+        changed = True
+        for child in children:
+            font.remove(child)
+        for child in new_order:
+            font.append(child)
+
+    if not changed:
+        return
+
+    # Preserve original namespace prefixes on write.
+    ET.register_namespace("", _SSML)
+    payload = ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zout:
+        for name, data in others.items():
+            zout.writestr(name, data)
+        zout.writestr("xl/styles.xml", payload)
+    path.write_bytes(buf.getvalue())
 
 
 def _positive_floats(value: object) -> list[float] | None:
@@ -408,6 +492,7 @@ def convert_data(
         else:
             _restore_row_heights(out_path, tables)
     _place_images(out_path, tables)
+    _canonicalize_ooxml_fonts(out_path)
 
     b64 = None
     if include_base64:

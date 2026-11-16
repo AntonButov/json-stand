@@ -91,9 +91,12 @@ def test_sheet_keeps_font_merge_and_exact_row_height(tmp_path: Path):
     from openpyxl import load_workbook
 
     wb = load_workbook(out)
+    # Row 3 has two filled cells → treated as a dense table row.
     cell = wb.active["A3"]
     assert cell.border.left.style == "thin"
     assert cell.border.right.style == "thin"
+    # Single-cell title-like rows stay unbordered.
+    assert wb.active["A1"].border.left.style is None or wb.active["A1"].value == "ПАО Сбербанк"
 
 
 def test_sheet_embeds_png_image_after_normalize(tmp_path: Path):

@@ -220,13 +220,20 @@ def _apply_style(cell, style: object) -> None:
 
 
 def _apply_grid_borders(ws, rows: object) -> None:
-    """PDF tables are ruled; paint a thin grid over the sheet footprint."""
+    """Paint borders on dense table rows only — avoid a full-sheet cage from loose text."""
     if not isinstance(rows, list):
         return
     for r_i, row in enumerate(rows, start=1):
         if not isinstance(row, list):
             continue
-        for c_i in range(1, len(row) + 1):
+        filled = [c_i for c_i, value in enumerate(row, start=1) if value not in (None, "")]
+        # Loose title/party lines are usually a single cell; real tables have ≥2.
+        if len(filled) < 2:
+            continue
+        for c_i in filled:
+            ws.cell(row=r_i, column=c_i).border = _GRID_BORDER
+        # Span empty cells between the first and last filled cell so ruled tables stay closed.
+        for c_i in range(filled[0], filled[-1] + 1):
             ws.cell(row=r_i, column=c_i).border = _GRID_BORDER
 
 

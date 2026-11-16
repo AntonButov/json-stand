@@ -88,3 +88,45 @@ def test_sheet_keeps_font_merge_and_exact_row_height(tmp_path: Path):
         )
     assert ("Arial", 8.5, True) in fonts
     assert ("Arial", 6.5, False) in fonts
+
+
+def test_sheet_embeds_png_image_after_normalize(tmp_path: Path):
+    import base64
+    import io
+
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.new("RGB", (10, 10), color=(255, 0, 0)).save(buf, format="PNG")
+    b64 = base64.b64encode(buf.getvalue()).decode("ascii")
+    out = tmp_path / "with-image.xlsx"
+    result = convert_data(
+        {
+            "sheets": [
+                {
+                    "page": 1,
+                    "rows": [["A"]],
+                    "col_widths_pt": [100.0],
+                    "row_heights_pt": [50.0],
+                    "origin_x_pt": 0,
+                    "origin_y_pt": 0,
+                    "images": [
+                        {
+                            "x_pt": 10.0,
+                            "y_pt": 5.0,
+                            "width_pt": 20.0,
+                            "height_pt": 20.0,
+                            "mime": "image/png",
+                            "data_b64": b64,
+                        }
+                    ],
+                }
+            ]
+        },
+        out,
+        normalize=True,
+    )
+    assert result.ok, result.to_dict()
+    names = zipfile.ZipFile(out).namelist()
+    assert any(n.startswith("xl/media/") for n in names)
+    assert any(n.startswith("xl/drawings/") for n in names)

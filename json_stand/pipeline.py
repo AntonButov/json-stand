@@ -9,6 +9,9 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl import Workbook, load_workbook
+from openpyxl.drawing.image import Image as XLImage
+from openpyxl.drawing.spreadsheet_drawing import AnchorMarker, OneCellAnchor
+from openpyxl.drawing.xdr import XDRPositiveSize2D
 from openpyxl.styles import Alignment, Font
 from openpyxl.utils import get_column_letter
 
@@ -18,6 +21,7 @@ from json_stand.models import ConvertError, ConvertResult
 # unit to 5.55 pt (19.579 cm per 100 units). Dividing PDF points by this keeps
 # the printed column the same width as the PDF column.
 EXCEL_PT_PER_WIDTH = 5.55
+EMU_PER_PT = 12700
 
 
 def _find_soffice() -> str | None:
@@ -147,6 +151,155 @@ def _restore_row_heights(path: Path, tables: list[dict[str, Any]]) -> None:
     wb.save(path)
 
 
+def _pt_to_cell(
+    x_pt: float,
+    y_pt: float,
+    col_widths: list[float],
+    row_heights: list[float],
+) -> tuple[int, int, int, int]:
+    """Return 0-based col/row and EMU offsets inside the cell."""
+    x = max(0.0, x_pt)
+    y = max(0.0, y_pt)
+    col = 0
+    for width in col_widths:
+        if x < width or col == len(col_widths) - 1:
+            break
+        x -= width
+        col += 1
+    if not col_widths:
+        col = 0
+        x = 0.0
+    row = 0
+    for height in row_heights:
+        if y < height or row == len(row_heights) - 1:
+            break
+        y -= height
+        row += 1
+    if not row_heights:
+        row = 0
+        y = 0.0
+    return col, row, int(round(x * EMU_PER_PT)), int(round(y * EMU_PER_PT))
+
+
+def _ensure_sheet_covers_images(table: dict[str, Any]) -> None:
+    """Pad empty rows so every image bbox fits on the sheet grid."""
+    images = table.get("images") or []
+    if not isinstance(images, list) or not images:
+        return
+    widths = _positive_floats(table.get("col_widths_pt")) or []
+    heights = _positive_floats(table.get("row_heights_pt")) or []
+    origin_x = float(table.get("origin_x_pt") or 0)
+    origin_y = float(table.get("origin_y_pt") or 0)
+    rows = table.get("rows") or []
+    styles = table.get("cell_styles") or []
+    if not isinstance(rows, list):
+        return
+
+    # Images above the text grid: prepend empty rows.
+    top_pad = 0.0
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        y = float(image.get("y_pt") or 0) - origin_y
+        if y < 0:
+            top_pad = max(top_pad, -y)
+    if top_pad > 0:
+        heights = [round(top_pad, 2)] + heights
+        cols = len(rows[0]) if rows and isinstance(rows[0], list) else 1
+        rows.insert(0, [None] * cols)
+        if isinstance(styles, list):
+            styles.insert(0, [None] * cols)
+        # Shift merges down by one row.
+        merges = table.get("merges") or []
+        shifted: list[str] = []
+        for ref in merges:
+            if not isinstance(ref, str) or ":" not in ref:
+                continue
+            start, end = ref.split(":", 1)
+            def bump(cell: str) -> str:
+                letters = "".join(ch for ch in cell if ch.isalpha())
+                number = int("".join(ch for ch in cell if ch.isdigit()) or "1")
+                return f"{letters}{number + 1}"
+            shifted.append(f"{bump(start)}:{bump(end)}")
+        table["merges"] = shifted
+        origin_y -= top_pad
+        table["origin_y_pt"] = round(origin_y, 2)
+
+    # Images below / to the right: extend heights and widths.
+    for image in images:
+        if not isinstance(image, dict):
+            continue
+        x1 = float(image.get("x_pt") or 0) - origin_x + float(image.get("width_pt") or 0)
+        y1 = float(image.get("y_pt") or 0) - origin_y + float(image.get("height_pt") or 0)
+        total_w = sum(widths) if widths else 0.0
+        total_h = sum(heights) if heights else 0.0
+        if x1 > total_w:
+            widths = list(widths) + [round(x1 - total_w, 2)]
+        if y1 > total_h:
+            extra = round(y1 - total_h, 2)
+            heights = list(heights) + [extra]
+            cols = len(rows[0]) if rows and isinstance(rows[0], list) else 1
+            rows.append([None] * cols)
+            if isinstance(styles, list):
+                styles.append([None] * cols)
+
+    table["col_widths_pt"] = widths
+    table["row_heights_pt"] = heights
+    table["rows"] = rows
+    table["cell_styles"] = styles
+
+
+def _place_images(path: Path, tables: list[dict[str, Any]]) -> None:
+    wb = load_workbook(path)
+    temp_dirs: list[Path] = []
+    try:
+        for ws, table in zip(wb.worksheets, tables):
+            images = table.get("images") or []
+            if not isinstance(images, list) or not images:
+                continue
+            widths = _positive_floats(table.get("col_widths_pt")) or []
+            heights = _positive_floats(table.get("row_heights_pt")) or []
+            origin_x = float(table.get("origin_x_pt") or 0)
+            origin_y = float(table.get("origin_y_pt") or 0)
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                b64 = image.get("data_b64")
+                if not isinstance(b64, str) or not b64:
+                    continue
+                try:
+                    raw = base64.b64decode(b64)
+                except Exception:  # noqa: BLE001
+                    continue
+                folder = Path(tempfile.mkdtemp(prefix="json-stand-img-"))
+                temp_dirs.append(folder)
+                tmp = folder / "img.png"
+                tmp.write_bytes(raw)
+                xl_img = XLImage(str(tmp))
+                width_pt = float(image.get("width_pt") or 0)
+                height_pt = float(image.get("height_pt") or 0)
+                x_pt = float(image.get("x_pt") or 0) - origin_x
+                y_pt = float(image.get("y_pt") or 0) - origin_y
+                col, row, col_off, row_off = _pt_to_cell(x_pt, y_pt, widths, heights)
+                marker = AnchorMarker(col=col, colOff=col_off, row=row, rowOff=row_off)
+                size = XDRPositiveSize2D(
+                    cx=max(1, int(round(width_pt * EMU_PER_PT))),
+                    cy=max(1, int(round(height_pt * EMU_PER_PT))),
+                )
+                xl_img.anchor = OneCellAnchor(_from=marker, ext=size)
+                ws.add_image(xl_img)
+            for index, points in enumerate(heights, start=1):
+                if points > 0:
+                    ws.row_dimensions[index].height = points
+            for index, points in enumerate(widths, start=1):
+                if points > 0:
+                    ws.column_dimensions[get_column_letter(index)].width = points_to_excel_width(points)
+        wb.save(path)
+    finally:
+        for folder in temp_dirs:
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 def _apply_geometry(ws, table: dict[str, Any]) -> None:
     widths = _positive_floats(table.get("col_widths_pt"))
     if widths:
@@ -177,16 +330,19 @@ def _load_payload(raw: dict[str, Any]) -> tuple[list[dict[str, Any]], ConvertErr
         rows = table.get("rows")
         if not isinstance(rows, list) or not rows:
             return [], ConvertError("bad_json", f"{label} {i} needs non-empty 'rows'")
-        cleaned.append(
-            {
-                "page": table.get("page", i),
-                "rows": rows,
-                "col_widths_pt": table.get("col_widths_pt"),
-                "row_heights_pt": table.get("row_heights_pt"),
-                "merges": table.get("merges") or [],
-                "cell_styles": table.get("cell_styles") or [],
-            }
-        )
+        item = {
+            "page": table.get("page", i),
+            "rows": rows,
+            "col_widths_pt": table.get("col_widths_pt"),
+            "row_heights_pt": table.get("row_heights_pt"),
+            "merges": table.get("merges") or [],
+            "cell_styles": table.get("cell_styles") or [],
+            "images": table.get("images") or [],
+            "origin_x_pt": table.get("origin_x_pt") or 0,
+            "origin_y_pt": table.get("origin_y_pt") or 0,
+        }
+        _ensure_sheet_covers_images(item)
+        cleaned.append(item)
     return cleaned, None
 
 
@@ -226,6 +382,14 @@ def convert_data(
                 _apply_style(written, style)
         _apply_merges(ws, table.get("merges"))
         _apply_geometry(ws, table)
+        ws.page_setup.paperSize = ws.PAPERSIZE_A4
+        ws.page_setup.fitToPage = True
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 0
+        ws.page_margins.left = 0.25
+        ws.page_margins.right = 0.25
+        ws.page_margins.top = 0.25
+        ws.page_margins.bottom = 0.25
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(out_path)
@@ -233,7 +397,6 @@ def convert_data(
     if normalize:
         nerr = _normalize_xlsx(out_path)
         if nerr == "libreoffice_missing":
-            # still ok for API without LO; CI installs soffice
             pass
         elif nerr:
             return ConvertResult(
@@ -244,6 +407,7 @@ def convert_data(
             )
         else:
             _restore_row_heights(out_path, tables)
+    _place_images(out_path, tables)
 
     b64 = None
     if include_base64:
